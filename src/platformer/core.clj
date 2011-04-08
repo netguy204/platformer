@@ -145,9 +145,9 @@
 
 (defn draw-img [^Graphics2D g img pos]
   (let [^ImageObserver obs nil
-	^double x (:x pos)
-	^double y (:y pos)]
-    (.drawImage g img x y obs)))
+	x (:x pos)
+	y (:y pos)]
+    (.drawImage g img (int x) (int y) obs)))
 
 (def *resources* (atom {}))
 
@@ -261,12 +261,53 @@
 	     %1)
 	  [] *shadow-types*))
 
+;; x increases to the right, y increases towards the back, z increases
+;; as we go up. coordinates are normalized so that a typical brick is
+;; 1x1x1
+(defrecord position3d
+  [x y z])
+
+(defn p3d- [p1 p2]
+  (let [{x1 :x y1 :y z1 :z} p1
+	{x2 :x y2 :y z2 :z} p2]
+    (position3d. (- x1 x2) (- y1 y2) (- z1 z2))))
+
+(defn p3d+ [p1 p2]
+  (let [{x1 :x y1 :y z1 :z} p1
+	{x2 :x y2 :y z2 :z} p2]
+    (position3d. (+ x1 x2) (+ y1 y2) (+ z1 z2))))
+
+;; position of the camera in world coordinates the origin of world
+;; coordinates is the bottom back left surface of the top left tile in
+;; the first layer
+;;
+;; the camera object is the 3d point that should be centered in the
+;; window when the world is projected to 2d
+;;
+(def *camera* (position3d. 2 -2 0))
+
+(defn w3d-to-sc2d [pos3d]
+  (let [{xc :x yc :y zc :z} (p3d- pos3d *camera*)
+	y0 (* *y-space* zc)
+	y (+ y0 (* *y-plane-space* yc))
+	x (* *x-space* xc)]
+    (position x y)))
+     
+(defn sc2d-to-g2d [pos]
+  "convert from a frame where (0,0) is the center of the screen and y
+increases as we go up to the frame demaneded by Graphics2d"
+  (let [{:keys [x y]} pos
+	x0 (/ *width* 2)
+	y0 (/ *height* 2)]
+    
+    (position (+ x x0)
+	      (+ (- y) y0))))
+
 (defn draw-tile [^Graphics2D g key pos]
   (if-let [img (key @*resources*)]
     (let [[layeri rowi coli] pos
-	  y-start (- 50 (* *y-space* layeri))
-	  y (+ y-start (* *y-plane-space* rowi))
-	  x (* *x-space* coli)]
+	  {:keys [x y]} (sc2d-to-g2d (w3d-to-sc2d (position3d. coli (- rowi) layeri)))]
+
       (draw-img g img (position x y)))))
 
 (defn draw-world [^Graphics2D g]
