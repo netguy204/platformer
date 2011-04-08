@@ -64,7 +64,7 @@
 			:or {enabled true
 			     clock (System/currentTimeMillis)
 			     function identity
-			     sleep 10}}]
+			     sleep 100}}]
   (animator. enabled clock function sleep))
 
 (defn- step-animator [animator agent]
@@ -182,7 +182,7 @@
 
 (def *scene*
      [[[:stone :stone :brown]
-       [:stone :brown :brown]
+       [:stone :brown :brown :brown]
        [:stone :dirt :dirt]]
       [[:none :none :chest]
        [:none :none :none]
@@ -192,20 +192,90 @@
 ;; stacked y spacing is 40
 ;; draw order switched
 (def *x-space* 100)
-(def *y-space* 40)
+(def *y-space* 42)
 (def *y-plane-space* 82)
 
-;(defn draw-shadow [^Graphics2D g layeri rowi coli]
-  
+(defn maybe-index [obj index]
+  (if (and obj
+	   (>= index 0)
+	   (< index (count obj)))
+    (obj index)))
+
+(defn scene-index [scene pos]
+  (let [[layeri rowi coli] pos]
+    (maybe-index (maybe-index (maybe-index scene layeri) rowi) coli)))
+
+(defn make-scene-index [layer row column]
+  [layer row column])
+
+(defn tile-add [pos offset]
+  (into [] (map + pos offset)))
+
+(defn shadow-with [shadow-type & tests]
+  (fn [scene pos]
+    (let [tests-pass (reduce #(and %1 (%2 scene pos)) true tests)]
+      (if tests-pass
+	shadow-type
+	nil))))
+
+(defn present [offset]
+  (fn [scene tgt]
+    (let [tile (scene-index scene (tile-add tgt offset))]
+      (and tile (not (= tile :none))))))
+
+(defn absent [offset]
+  (fn [scene tgt]
+    (let [tile (scene-index scene (tile-add tgt offset))]
+      (or (not tile) (= tile :none)))))
+
+(def *shadow-types*
+     [(shadow-with :shadow-south-east
+		   (present [1 1 1])
+		   (absent [1 0 1]))
+      (shadow-with :shadow-east
+		   (present [1 0 1]))
+      (shadow-with :shadow-north-east
+		   (present [1 -1 1])
+		   (absent [1 -1 0])
+		   (absent [1 0 1]))
+      (shadow-with :shadow-side-west
+		   (present [0 1 -1])
+		   (absent [0 1 0]))
+      (shadow-with :shadow-south
+		   (present [1 1 0]))
+      (shadow-with :shadow-north
+		   (present [1 -1 0]))
+      (shadow-with :shadow-south-west
+		   (present [1 1 -1])
+		   (absent [1 0 -1]))
+      (shadow-with :shadow-west
+		   (present [1 0 -1]))
+      (shadow-with :shadow-north-west
+		   (present [1 -1 -1])
+		   (absent [1 -1 0])
+		   (absent [1 0 -1]))])
+
+(defn shadow-types [scene pos]
+  (reduce #(if-let [result (%2 scene pos)]
+	     (conj %1 result)
+	     %1)
+	  [] *shadow-types*))
+
+(defn draw-tile [^Graphics2D g key pos]
+  (if-let [img (key @*resources*)]
+    (let [[layeri rowi coli] pos
+	  y-start (- 50 (* *y-space* layeri))
+	  y (+ y-start (* *y-plane-space* rowi))
+	  x (* *x-space* coli)]
+      (draw-img g img (position x y)))))
+
 (defn draw-world [^Graphics2D g]
   (doseq [[layer layeri] (zip *scene* (range (count *scene*)))
 	  [row rowi] (zip layer (range (count layer)))
 	  [img-key coli] (zip row (range (count row)))]
 
-
-    (if (img-key @*resources*)
-      (let [img (img-key @*resources*)
-	    y-start (- 250 (* *y-space* layeri))
-	    y (+ (- y-start (* *y-plane-space* (count layer))) (* *y-plane-space* rowi))
-	    x (* *x-space* coli)]
-	(draw-img g img (position x y))))))
+    (let [pos (make-scene-index layeri rowi coli)]
+      (draw-tile g img-key pos)
+      (if-let [shadows (shadow-types *scene* (make-scene-index layeri rowi coli))]
+	(doseq [shadow shadows]
+	  (draw-tile g shadow pos))))))
