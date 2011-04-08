@@ -147,7 +147,6 @@
   (let [^ImageObserver obs nil
 	^double x (:x pos)
 	^double y (:y pos)]
-    (println "hello1" img)
     (.drawImage g img x y obs)))
 
 (def *resources* (atom {}))
@@ -158,17 +157,55 @@
 (defn load-resources []
   (swap! *resources*
     (fn [_] {:brown (cute "Brown Block.png")
-	     :dirt (cute "Dirt Block.png")})))
+	     :dirt (cute "Dirt Block.png")
+	     :stone (cute "Stone Block.png")
+	     :chest (cute "Chest Closed.png")
+	     :shadow-east (cute "Shadow East.png")
+	     :shadow-north-east (cute "Shadow North East.png")
+	     :shadow-north-west (cute "Shadow North West.png")
+	     :shadow-north (cute "Shadow North.png")
+	     :shadow-side-west (cute "Shadow Side West.png")
+	     :shadow-south-east (cute "Shadow South East.png")
+	     :shadow-south-west (cute "Shadow South West.png")
+	     :shadow-south (cute "Shadow South.png")
+	     :shadow-west (cute "Shadow West.png")})))
 
+
+(defn zip [& seqs]
+  (apply map list seqs))
+
+(defmacro doseq-idx [[[var idx] sequence] & body]
+  `(let [seq2# (zip ~sequence (range (count ~sequence)))]
+     (dotimes [item# seq2#]
+       (let [[~var ~idx] item#]
+	 ~@body))))
+
+(def *scene*
+     [[[:stone :stone :brown]
+       [:stone :brown :brown]
+       [:stone :dirt :dirt]]
+      [[:none :none :chest]
+       [:none :none :none]
+       [:none :dirt :dirt]]])
 
 ;; plane y spacing is 82
 ;; stacked y spacing is 40
 ;; draw order switched
 (def *x-space* 100)
 (def *y-space* 40)
+(def *y-plane-space* 82)
 
+;(defn draw-shadow [^Graphics2D g layeri rowi coli]
+  
 (defn draw-world [^Graphics2D g]
-  (dotimes [x 5]
-    (dotimes [y 5]
-      (draw-img g (:dirt @*resources*)
-		(position (+ 10 (* x *x-space*)) (- 200 (* y *y-space*)))))))
+  (doseq [[layer layeri] (zip *scene* (range (count *scene*)))
+	  [row rowi] (zip layer (range (count layer)))
+	  [img-key coli] (zip row (range (count row)))]
+
+
+    (if (img-key @*resources*)
+      (let [img (img-key @*resources*)
+	    y-start (- 250 (* *y-space* layeri))
+	    y (+ (- y-start (* *y-plane-space* (count layer))) (* *y-plane-space* rowi))
+	    x (* *x-space* coli)]
+	(draw-img g img (position x y))))))
