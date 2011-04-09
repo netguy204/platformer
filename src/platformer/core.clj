@@ -72,9 +72,7 @@
 
 (defn p3d-int [p]
   (let [{:keys [x y z]} p]
-    (position3d. (int x)
-		 (int y)
-		 (int z))))
+    (position3d. x y z)))
 
 (defrecord particle
   [position
@@ -437,7 +435,9 @@ tile to a frame with the origin at the top left of the tile"
 	{y2 :y z2 :z} (p3d-int p2)]
     (cond
      (and (= y1 y2) (= z1 z2)) 0
-     (and (<= z1 z2) (>= y1 y2)) -1
+     (< z1 z2) -1
+     (> z1 z2) 1
+     (> y1 y2) -1
      true 1)))
 
 (defn execute-draw [^Graphics2D g commands]
