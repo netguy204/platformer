@@ -28,6 +28,7 @@
 
 ;; bound dynamically to the current graphics context
 (def *g* nil)
+(def *panel* (atom nil))
 
 (defmulti draw-object type)
 
@@ -157,8 +158,6 @@
        [:tree-short :none :chest]
        [:none :none :none :character-boy]
        [:none :dirt :dirt]]])
-
-(def *panel* (atom nil))
 
 ;; plane y spacing is 82
 ;; stacked y spacing is 40
@@ -302,7 +301,7 @@ tile to a frame with the origin at the top left of the tile"
     (let [p2d (tc-to-te
 	       (sc2d-to-g2d
 		(w3d-to-sc2d pos)))]
-		
+
       (draw-img g (:img img) p2d))))
 
 (defn- draw-order-pos3d [p1 p2]
@@ -351,7 +350,7 @@ tile to a frame with the origin at the top left of the tile"
 (defn draw-world [^Graphics2D g]
   (execute-draw g {:background (generate-background-shadow-commands *scene*)
 		   :active (scene-to-commands *scene*)}))
-		
+
 (defn- box-panel []
   (proxy [JPanel] []
     (getPreferredSize [] (Dimension. *width* *height*))
@@ -371,9 +370,9 @@ tile to a frame with the origin at the top left of the tile"
   (let [frame (JFrame. "My Box")
 	hello (JLabel. "Hello World")
 	panel (box-panel)]
-    
+
     (swap! *panel* (fn [_] panel))
-    
+
     (doto frame
       (.add panel)
       (.pack)
