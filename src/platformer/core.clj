@@ -10,11 +10,33 @@
 (def *width* 400)
 (def *height* 400)
 
+;; y-space is the vertical offset between stacked tiles
+;; y-plane-space is the vertical offset between tiles in a plane
+(def *x-space* 100)
+(def *y-space* 41)
+(def *y-plane-space* 80)
+
 (defrecord position-rec
   [x y])
 
 (defn position [x y]
   (position-rec. x y))
+
+;; x increases to the right, y increases towards the back, z increases
+;; as we go up. coordinates are normalized so that a typical brick is
+;; 1x1x1
+(defrecord position3d
+  [x y z])
+
+(defn p3d- [p1 p2]
+  (let [{x1 :x y1 :y z1 :z} p1
+	{x2 :x y2 :y z2 :z} p2]
+    (position3d. (- x1 x2) (- y1 y2) (- z1 z2))))
+
+(defn p3d+ [p1 p2]
+  (let [{x1 :x y1 :y z1 :z} p1
+	{x2 :x y2 :y z2 :z} p2]
+    (position3d. (+ x1 x2) (+ y1 y2) (+ z1 z2))))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -149,6 +171,8 @@
        (let [[~var ~idx] item#]
 	 ~@body))))
 
+(def *character* (atom (list (position3d. 2.7 -2 1) :character-boy)))
+
 (def *scene*
      [[[:grass :grass :grass :grass]
        [:stone :stone :brown :grass]
@@ -156,15 +180,8 @@
        [:stone :dirt :dirt]]
       [[:none :none :none :none]
        [:tree-short :none :chest]
-       [:none :none :none :character-boy]
+       [:none :none :none :none]
        [:none :dirt :dirt]]])
-
-;; plane y spacing is 82
-;; stacked y spacing is 40
-;; draw order switched
-(def *x-space* 100)
-(def *y-space* 40)
-(def *y-plane-space* 80)
 
 (defn maybe-index [obj index]
   (if (and obj
@@ -246,22 +263,6 @@
 	     %1)
 	  [] *shadow-types*))
 
-;; x increases to the right, y increases towards the back, z increases
-;; as we go up. coordinates are normalized so that a typical brick is
-;; 1x1x1
-(defrecord position3d
-  [x y z])
-
-(defn p3d- [p1 p2]
-  (let [{x1 :x y1 :y z1 :z} p1
-	{x2 :x y2 :y z2 :z} p2]
-    (position3d. (- x1 x2) (- y1 y2) (- z1 z2))))
-
-(defn p3d+ [p1 p2]
-  (let [{x1 :x y1 :y z1 :z} p1
-	{x2 :x y2 :y z2 :z} p2]
-    (position3d. (+ x1 x2) (+ y1 y2) (+ z1 z2))))
-
 ;; position of the camera in world coordinates the origin of world
 ;; coordinates is the bottom back left surface of the top left tile in
 ;; the first layer
@@ -307,7 +308,10 @@ tile to a frame with the origin at the top left of the tile"
 (defn- draw-order-pos3d [p1 p2]
   (let [{y1 :y z1 :z} p1
 	{y2 :y z2 :z} p2]
-    (and (> y1 y2) (< z1 z2))))
+    (cond
+     (and (= y1 y2) (= z1 z2)) 0
+     (and (<= z1 z2) (>= y1 y2)) -1
+     true 1)))
 
 (defn execute-draw [^Graphics2D g commands]
   (let [{:keys [background active overlay]} commands]
@@ -349,7 +353,8 @@ tile to a frame with the origin at the top left of the tile"
 
 (defn draw-world [^Graphics2D g]
   (execute-draw g {:background (generate-background-shadow-commands *scene*)
-		   :active (scene-to-commands *scene*)}))
+		   :active (conj (scene-to-commands *scene*)
+				 @*character*)}))
 
 (defn- box-panel []
   (proxy [JPanel] []
