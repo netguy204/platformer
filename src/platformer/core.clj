@@ -391,7 +391,7 @@
      (fn [p] (add-force p (p3d-scale (keyboard-unit-force) f))))))
 
 (def *force-generators*
-     [(make-spring-force *camera* (:particle *character*) 1 1)
+     [(make-spring-force *camera* (:particle *character*) 1 0.2)
       (make-keyboard-force (:particle *character*) 120)])
 
 (def *particles*
