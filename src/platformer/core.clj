@@ -26,24 +26,6 @@
   (game-position [obj]
     (:pos obj)))
 
-(defn circle [& {:keys [pos radius] :or {radius 5}}]
-  (circle-rec. pos radius))
-
-;; the world is an ordered array of layers that are drawn bottom to
-;; top and apply their influences from bottom to top
-(def *world* (atom []))
-
-(defn- make-layer [n]
-  (into [] (map (fn [_] (circle :pos (position (rand *width*)
-					       (rand *height*))))
-		(range n))))
-
-(defn- make-world [old l]
-  (into [] (map (fn [_] (make-layer 5)) (range l))))
-
-(defn populate-sample-world []
-  (swap! *world* make-world 3))
-
 ;; bound dynamically to the current graphics context
 (def *g* nil)
 
@@ -101,37 +83,6 @@
 (defn stop-animator []
   (send-off *animator* stop-animation))
 
-(defn draw-world [^Graphics2D g]
-  (binding [*g* g]
-    (doseq [layer @*world*
-	    object layer]
-      (draw-object object))))
-
-(defn- box-panel []
-  (proxy [JPanel] []
-    (getPreferredSize [] (Dimension. *width* *height*))
-
-    (paint [^Graphics2D g]
-      (proxy-super paint g)
-      (let [size (.getSize this)
-	    width (.getWidth size)
-	    height (.getHeight size)]
-
-	(doto g
-	  (.setStroke (BasicStroke. 1))
-	  (.setColor Color/gray)
-	  (#'draw-world))))))
-
-(defn box []
-  (let [frame (JFrame. "My Box")
-	hello (JLabel. "Hello World")
-	panel (box-panel)]
-    (doto frame
-      (.add panel)
-      (.pack)
-      (.setVisible true))
-    (start-animator panel)))
-
 (defn get-resource [file]
   (println "getting resource " file)
   (let [loader (clojure.lang.RT/baseLoader)]
@@ -151,8 +102,9 @@
 
 (def *resources* (atom {}))
 
-(defn- cute [img]
-  (load-img (get-resource (str "cute/" img))))
+(defn- cute [img & {:keys [properties] :or {properties [:shadow]}}]
+  {:img (load-img (get-resource (str "cute/" img)))
+   :properties properties})
 
 (defn load-resources []
   (swap! *resources*
@@ -160,6 +112,9 @@
 	     :dirt (cute "Dirt Block.png")
 	     :stone (cute "Stone Block.png")
 	     :chest (cute "Chest Closed.png")
+	     :tree-short (cute "Tree Short.png" :properties [:noshadow])
+	     :wood (cute "Wood Block.png")
+	     :wall (cute "Wall Block.png")
 	     :shadow-east (cute "Shadow East.png")
 	     :shadow-north-east (cute "Shadow North East.png")
 	     :shadow-north-west (cute "Shadow North West.png")
@@ -184,7 +139,7 @@
      [[[:stone :stone :brown]
        [:stone :brown :brown :brown]
        [:stone :dirt :dirt]]
-      [[:none :none :chest]
+      [[:tree-short :none :chest]
        [:none :none :none]
        [:none :dirt :dirt]]])
 
@@ -192,8 +147,8 @@
 ;; stacked y spacing is 40
 ;; draw order switched
 (def *x-space* 100)
-(def *y-space* 42)
-(def *y-plane-space* 82)
+(def *y-space* 40)
+(def *y-plane-space* 80)
 
 (defn maybe-index [obj index]
   (if (and obj
@@ -218,15 +173,20 @@
 	shadow-type
 	nil))))
 
+(defn shadows? [tile]
+  (if tile
+    (let [res (tile @*resources*)]
+      (and res (:properties res) (some #{:shadow} (:properties res))))))
+
 (defn present [offset]
   (fn [scene tgt]
     (let [tile (scene-index scene (tile-add tgt offset))]
-      (and tile (not (= tile :none))))))
+      (shadows? tile))))
 
 (defn absent [offset]
   (fn [scene tgt]
     (let [tile (scene-index scene (tile-add tgt offset))]
-      (or (not tile) (= tile :none)))))
+      (not (shadows? tile)))))
 
 (def *shadow-types*
      [(shadow-with :shadow-south-east
@@ -284,7 +244,7 @@
 ;; the camera object is the 3d point that should be centered in the
 ;; window when the world is projected to 2d
 ;;
-(def *camera* (position3d. 2 -2 0))
+(def *camera* (position3d. 1.2 -1 0))
 
 (defn w3d-to-sc2d [pos3d]
   (let [{xc :x yc :y zc :z} (p3d- pos3d *camera*)
@@ -292,31 +252,82 @@
 	y (+ y0 (* *y-plane-space* yc))
 	x (* *x-space* xc)]
     (position x y)))
-     
+
 (defn sc2d-to-g2d [pos]
   "convert from a frame where (0,0) is the center of the screen and y
-increases as we go up to the frame demaneded by Graphics2d"
+increases as we go up to the frame demanded by Graphics2d"
   (let [{:keys [x y]} pos
 	x0 (/ *width* 2)
 	y0 (/ *height* 2)]
-    
+
     (position (+ x x0)
 	      (+ (- y) y0))))
+
+(defn tc-to-te [pos]
+  "convert a point from a frame with the origin at the center of the
+tile to a frame with the origin at the top left of the tile"
+  (let [mcx (- 101 (/ *x-space* 2))
+	mcy (- 171 (/ *y-plane-space* 2) (/ *y-space* 2))
+	{:keys [x y]} pos]
+    (position (- x mcx) (- y mcy))))
 
 (defn draw-tile [^Graphics2D g key pos]
   (if-let [img (key @*resources*)]
     (let [[layeri rowi coli] pos
-	  {:keys [x y]} (sc2d-to-g2d (w3d-to-sc2d (position3d. coli (- rowi) layeri)))]
+	  p2d (tc-to-te
+	       (sc2d-to-g2d
+		(w3d-to-sc2d
+		 (position3d. coli (- rowi) layeri))))]
 
-      (draw-img g img (position x y)))))
+      (draw-img g (:img img) p2d))))
 
 (defn draw-world [^Graphics2D g]
+
+  ;; draw shadows on the lowest level
+  (let [ground (first *scene*)
+	grows (count ground)
+	gcols (apply max (map count ground))]
+    (dotimes [rii (+ grows 2)]
+      (dotimes [cii (+ gcols 2)]
+	(let [pos (make-scene-index -1 (- rii 1) (- cii 1))]
+	  (doseq [shadow (shadow-types *scene* pos)]
+	    (draw-tile g shadow pos))))))
+
+  ;; stack the tiles and shadows
   (doseq [[layer layeri] (zip *scene* (range (count *scene*)))
 	  [row rowi] (zip layer (range (count layer)))
 	  [img-key coli] (zip row (range (count row)))]
 
     (let [pos (make-scene-index layeri rowi coli)]
       (draw-tile g img-key pos)
-      (if-let [shadows (shadow-types *scene* (make-scene-index layeri rowi coli))]
-	(doseq [shadow shadows]
-	  (draw-tile g shadow pos))))))
+      (doseq [shadow (shadow-types *scene* (make-scene-index layeri rowi coli))]
+	(draw-tile g shadow pos)))))
+
+(defn- box-panel []
+  (proxy [JPanel] []
+    (getPreferredSize [] (Dimension. *width* *height*))
+
+    (paint [^Graphics2D g]
+      (proxy-super paint g)
+      (let [size (.getSize this)
+	    width (.getWidth size)
+	    height (.getHeight size)]
+
+	(doto g
+	  (.setStroke (BasicStroke. 1))
+	  (.setColor Color/gray)
+	  (#'draw-world))))))
+
+(defn box []
+  (let [frame (JFrame. "My Box")
+	hello (JLabel. "Hello World")
+	panel (box-panel)]
+    (doto frame
+      (.add panel)
+      (.pack)
+      (.setVisible true))
+    (start-animator panel)))
+
+(defn -main [& args]
+  (load-resources)
+  (box))
