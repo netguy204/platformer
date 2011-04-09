@@ -70,6 +70,10 @@
 (defn p3d-unit [p]
   (p3d-scale p (/ (p3d-mag p))))
 
+(defn p3d-int [p]
+  (let [{:keys [x y z]} p]
+    (position3d. (int x) (int y) (int z))))
+
 (defrecord particle
   [position
    velocity
@@ -431,8 +435,8 @@ tile to a frame with the origin at the top left of the tile"
       (draw-img g (:img img) p2d))))
 
 (defn- draw-order-pos3d [p1 p2]
-  (let [{y1 :y z1 :z} p1
-	{y2 :y z2 :z} p2]
+  (let [{y1 :y z1 :z} (p3d-int p1)
+	{y2 :y z2 :z} (p3d-int p2)]
     (cond
      (and (= y1 y2) (= z1 z2)) 0
      (and (<= z1 z2) (>= y1 y2)) -1
