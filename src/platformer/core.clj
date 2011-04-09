@@ -115,6 +115,8 @@
 	     :tree-short (cute "Tree Short.png" :properties [:noshadow])
 	     :wood (cute "Wood Block.png")
 	     :wall (cute "Wall Block.png")
+	     :grass (cute "Grass Block.png")
+	     :character-boy (cute "Character Boy.png" :properties [:noshadow])
 	     :shadow-east (cute "Shadow East.png")
 	     :shadow-north-east (cute "Shadow North East.png")
 	     :shadow-north-west (cute "Shadow North West.png")
@@ -136,11 +138,13 @@
 	 ~@body))))
 
 (def *scene*
-     [[[:stone :stone :brown]
+     [[[:grass :grass :grass :grass]
+       [:stone :stone :brown :grass]
        [:stone :brown :brown :brown]
        [:stone :dirt :dirt]]
-      [[:tree-short :none :chest]
-       [:none :none :none]
+      [[:none :none :none :none]
+       [:tree-short :none :chest]
+       [:none :none :none :character-boy]
        [:none :dirt :dirt]]])
 
 ;; plane y spacing is 82
@@ -170,10 +174,9 @@
   (fn [scene pos]
     (let [tests-pass (reduce #(and %1 (%2 scene pos)) true tests)]
       (if tests-pass
-	shadow-type
-	nil))))
+	shadow-type))))
 
-(defn shadows? [tile]
+(defn shadower? [tile]
   (if tile
     (let [res (tile @*resources*)]
       (and res (:properties res) (some #{:shadow} (:properties res))))))
@@ -181,12 +184,12 @@
 (defn present [offset]
   (fn [scene tgt]
     (let [tile (scene-index scene (tile-add tgt offset))]
-      (shadows? tile))))
+      (shadower? tile))))
 
 (defn absent [offset]
   (fn [scene tgt]
     (let [tile (scene-index scene (tile-add tgt offset))]
-      (not (shadows? tile)))))
+      (not (shadower? tile)))))
 
 (def *shadow-types*
      [(shadow-with :shadow-south-east
@@ -244,7 +247,7 @@
 ;; the camera object is the 3d point that should be centered in the
 ;; window when the world is projected to 2d
 ;;
-(def *camera* (position3d. 1.2 -1 0))
+(def *camera* (position3d. 1.4 -1.5 0))
 
 (defn w3d-to-sc2d [pos3d]
   (let [{xc :x yc :y zc :z} (p3d- pos3d *camera*)
@@ -300,8 +303,9 @@ tile to a frame with the origin at the top left of the tile"
 
     (let [pos (make-scene-index layeri rowi coli)]
       (draw-tile g img-key pos)
-      (doseq [shadow (shadow-types *scene* (make-scene-index layeri rowi coli))]
-	(draw-tile g shadow pos)))))
+      (if (shadower? img-key)
+	(doseq [shadow (shadow-types *scene* (make-scene-index layeri rowi coli))]
+	  (draw-tile g shadow pos))))))
 
 (defn- box-panel []
   (proxy [JPanel] []
