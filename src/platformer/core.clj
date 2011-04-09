@@ -260,7 +260,7 @@
 
 (def *character* {:particle (atom (make-particle (position3d. 2.7 -2 1)
 						 :inverse-mass (/ 100)
-						 :damping 0.85))
+						 :damping 0.90))
 		  :sprite :character-boy})
 
 (defn character-position []
@@ -370,7 +370,7 @@
 ;;
 (def *camera* (atom (make-particle (position3d. 1.4 -1.5 0)
 				   :inverse-mass (/ 1)
-				   :damping 0.8)))
+				   :damping 0.95)))
 
 (defn camera-position []
   (:position @*camera*))
@@ -509,7 +509,8 @@ tile to a frame with the origin at the top left of the tile"
   (physics-update *particles* *force-generators* (/ dt 1000))
   (.repaint (:panel animator)))
 
-(def *animator* (agent (make-animator :function #'update-world)))
+(def *animator* (agent (make-animator :function #'update-world
+				      :sleep 50)))
 
 (defn start-animator [panel]
   (send-off *animator* start-animation *animator* panel))
