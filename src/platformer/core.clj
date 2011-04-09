@@ -2,7 +2,7 @@
   (:use [clojure.contrib.duck-streams :only [pwd]])
   (:import [javax.swing JFrame JLabel JPanel]
 	   [javax.imageio ImageIO]
-	   [java.awt.image BufferedImage]
+	   [java.awt.image BufferedImage ImageObserver]
 	   [java.awt.event ActionListener]
 	   [java.awt GridLayout Graphics Graphics2D Color Dimension BasicStroke]
 	   [java.awt.geom AffineTransform Ellipse2D$Double]))
@@ -98,12 +98,23 @@
   (let [^ImageObserver obs nil
 	x (:x pos)
 	y (:y pos)]
-    (.drawImage g img (int x) (int y) obs)))
+    (.drawImage g ^BufferedImage img (int x) (int y) obs)))
 
 (def *resources* (atom {}))
 
+(defn load-img-compat [resource]
+  (let [img (load-img resource)
+	width (.getWidth img)
+	height (.getHeight img)
+	img2 (-> @*panel*
+		 (.getGraphicsConfiguration)
+		 (.createCompatibleImage width height (.getTransparency img)))
+	g (.getGraphics img2)]
+    (.drawImage g img 0 0 nil)
+    img2))
+
 (defn- cute [img & {:keys [properties] :or {properties [:shadow]}}]
-  {:img (load-img (get-resource (str "cute/" img)))
+  {:img (load-img-compat (get-resource (str "cute/" img)))
    :properties properties})
 
 (defn load-resources []
@@ -146,6 +157,8 @@
        [:tree-short :none :chest]
        [:none :none :none :character-boy]
        [:none :dirt :dirt]]])
+
+(def *panel* (atom nil))
 
 ;; plane y spacing is 82
 ;; stacked y spacing is 40
@@ -313,19 +326,22 @@ tile to a frame with the origin at the top left of the tile"
 
     (paint [^Graphics2D g]
       (proxy-super paint g)
-      (let [size (.getSize this)
-	    width (.getWidth size)
-	    height (.getHeight size)]
+      (let [size (.getSize this)]
+	(binding [*width* (.getWidth size)
+		  *height* (.getHeight size)]
 
-	(doto g
-	  (.setStroke (BasicStroke. 1))
-	  (.setColor Color/gray)
-	  (#'draw-world))))))
+	  (doto g
+	    (.setStroke (BasicStroke. 1))
+	    (.setColor Color/gray)
+	    (#'draw-world)))))))
 
 (defn box []
   (let [frame (JFrame. "My Box")
 	hello (JLabel. "Hello World")
 	panel (box-panel)]
+    
+    (swap! *panel* (fn [_] panel))
+    
     (doto frame
       (.add panel)
       (.pack)
@@ -333,5 +349,6 @@ tile to a frame with the origin at the top left of the tile"
     (start-animator panel)))
 
 (defn -main [& args]
-  (load-resources)
-  (box))
+  (box)
+  (load-resources))
+
