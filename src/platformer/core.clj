@@ -3,7 +3,7 @@
   (:import [javax.swing JFrame JLabel JPanel]
 	   [javax.imageio ImageIO]
 	   [java.awt.image BufferedImage ImageObserver]
-	   [java.awt.event ActionListener]
+	   [java.awt.event ActionListener KeyAdapter KeyEvent]
 	   [java.awt GridLayout Graphics Graphics2D Color Dimension BasicStroke]
 	   [java.awt.geom AffineTransform Ellipse2D$Double]))
 
@@ -15,6 +15,20 @@
 (def *x-space* 100)
 (def *y-space* 41)
 (def *y-plane-space* 80)
+
+(def *keyboard* (atom {}))
+
+(defn left-pressed []
+  (@*keyboard* (KeyEvent/VK_LEFT)))
+
+(defn right-pressed []
+  (@*keyboard* (KeyEvent/VK_RIGHT)))
+
+(defn up-pressed []
+  (@*keyboard* (KeyEvent/VK_UP)))
+
+(defn down-pressed []
+  (@*keyboard* (KeyEvent/VK_DOWN)))
 
 (defrecord position-rec
   [x y])
@@ -37,6 +51,94 @@
   (let [{x1 :x y1 :y z1 :z} p1
 	{x2 :x y2 :y z2 :z} p2]
     (position3d. (+ x1 x2) (+ y1 y2) (+ z1 z2))))
+
+(defn p3d-scale [p scale]
+  (let [{:keys [x y z]} p]
+    (position3d. (* x scale) (* y scale) (* z scale))))
+
+(defn p3d-dot [p1 p2]
+  (let [{x1 :x y1 :y z1 :z} p1
+	{x2 :x y2 :y z2 :z} p2]
+    (+ (* x1 x2) (* y1 y2) (* z1 z2))))
+
+(defn p3d-mag2 [p]
+  (p3d-dot p p))
+
+(defn p3d-mag [p]
+  (Math/sqrt (p3d-mag2 p)))
+
+(defn p3d-unit [p]
+  (p3d-scale p (/ (p3d-mag p))))
+
+(defrecord particle
+  [position
+   velocity
+   damping
+   accum-force
+   inverse-mass])
+
+(def *zero-vector* (position3d. 0 0 0))
+
+(defn make-particle [position & {:keys [velocity damping inverse-mass]
+				 :or {velocity *zero-vector*
+				      damping 0.95
+				      inverse-mass 0}}]
+  (particle. position velocity damping *zero-vector* inverse-mass))
+
+(defn integrate [particle duration]
+  (let [{:keys [position velocity damping accum-force inverse-mass]} particle
+	acceleration (p3d-scale accum-force inverse-mass)
+	new-velocity (p3d+ velocity
+			   (p3d-scale acceleration duration))
+	new-position (p3d+ position
+			   (p3d-scale velocity duration))
+	new-velocity-damped (p3d-scale new-velocity damping)]
+
+    (conj particle
+	  {:position new-position
+	   :velocity new-velocity-damped})))
+
+(defn reset-force [particle]
+  (conj particle {:accum-force (position3d. 0 0 0)}))
+
+(defn compute-spring-force [p1 p2 k rest-length]
+  (let [pos1 (:position p1)
+	pos2 (:position p2)
+	displacement (p3d- pos1 pos2)
+	length (p3d-mag displacement)]
+    (if (< length 0.01) (position3d. 0 0 0)
+	(let [unit (p3d-unit displacement)
+	      offset (- rest-length length)
+	      force-magnitude (* offset k)
+	      force (p3d-scale unit force-magnitude)]
+
+	  force))))
+
+(defn add-force [particle force]
+  (conj particle {:accum-force (p3d+ (:accum-force particle) force)}))
+
+(defn make-spring-force [p1 p2 k rest-length]
+  "the generated function is a mutator"
+  (fn [duration]
+    (swap! p1
+     (fn [p] (add-force p (compute-spring-force p @p2 k rest-length))))))
+
+(defn integrate-particles [particles duration]
+  (doseq [particle particles]
+    (swap! particle integrate duration)))
+
+(defn apply-forces [force-generators duration]
+  (doseq [generator force-generators]
+    (generator duration)))
+
+(defn reset-forces [particles]
+  (doseq [particle particles]
+    (swap! particle reset-force)))
+
+(defn physics-update [particles generators duration]
+  (reset-forces particles)
+  (apply-forces generators duration)
+  (integrate-particles particles duration))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -94,17 +196,6 @@
 (defn- start-animation [animator agent panel]
   (send-off agent #'step-animator agent)
   (conj animator {:enabled true :panel panel}))
-
-(defn update-world [dt animator]
-  (.repaint (:panel animator)))
-
-(def *animator* (agent (make-animator :function #'update-world)))
-
-(defn start-animator [panel]
-  (send-off *animator* start-animation *animator* panel))
-
-(defn stop-animator []
-  (send-off *animator* stop-animation))
 
 (defn get-resource [file]
   (println "getting resource " file)
@@ -171,7 +262,14 @@
        (let [[~var ~idx] item#]
 	 ~@body))))
 
-(def *character* (atom (list (position3d. 2.7 -2 1) :character-boy)))
+(def *character* {:particle (atom (make-particle (position3d. 2.7 -2 1)
+						 :inverse-mass (/ 100)
+						 :damping 0.85))
+		  :sprite :character-boy})
+
+(defn character-position []
+  (list (:position @(:particle *character*))
+	(:sprite *character*)))
 
 (def *scene*
      [[[:grass :grass :grass :grass]
@@ -270,10 +368,37 @@
 ;; the camera object is the 3d point that should be centered in the
 ;; window when the world is projected to 2d
 ;;
-(def *camera* (position3d. 1.4 -1.5 0))
+(def *camera* (atom (make-particle (position3d. 1.4 -1.5 0)
+				   :inverse-mass (/ 1)
+				   :damping 0.8)))
+
+(defn camera-position []
+  (:position @*camera*))
+
+
+(defn- keyboard-unit-force []
+  (let [f (reduce p3d+
+	    [(if (up-pressed) (position3d. 0 1 0) *zero-vector*)
+	     (if (down-pressed) (position3d. 0 -1 0) *zero-vector*)
+	     (if (left-pressed) (position3d. -1 0 0) *zero-vector*)
+	     (if (right-pressed) (position3d. 1 0 0) *zero-vector*)])]
+    (if (< (p3d-mag f) 0.001) *zero-vector*
+	(p3d-unit f))))
+
+(defn make-keyboard-force [p f]
+  (fn [duration]
+    (swap! p
+     (fn [p] (add-force p (p3d-scale (keyboard-unit-force) f))))))
+
+(def *force-generators*
+     [(make-spring-force *camera* (:particle *character*) 1 1)
+      (make-keyboard-force (:particle *character*) 120)])
+
+(def *particles*
+     [*camera* (:particle *character*)])
 
 (defn w3d-to-sc2d [pos3d]
-  (let [{xc :x yc :y zc :z} (p3d- pos3d *camera*)
+  (let [{xc :x yc :y zc :z} (p3d- pos3d (camera-position))
 	y0 (* *y-space* zc)
 	y (+ y0 (* *y-plane-space* yc))
 	x (* *x-space* xc)]
@@ -354,7 +479,7 @@ tile to a frame with the origin at the top left of the tile"
 (defn draw-world [^Graphics2D g]
   (execute-draw g {:background (generate-background-shadow-commands *scene*)
 		   :active (conj (scene-to-commands *scene*)
-				 @*character*)}))
+				 (character-position))}))
 
 (defn- box-panel []
   (proxy [JPanel] []
@@ -371,12 +496,34 @@ tile to a frame with the origin at the top left of the tile"
 	    (.setColor Color/gray)
 	    (#'draw-world)))))))
 
+(defn- key-listener [kbd]
+  (proxy [KeyAdapter] []
+    (keyReleased [e]
+      (swap! kbd conj {(.getKeyCode e) false}))
+    (keyPressed [e]
+      (swap! kbd conj {(.getKeyCode e) true}))))
+
+(defn update-world [dt animator]
+  (physics-update *particles* *force-generators* (/ dt 1000))
+  (.repaint (:panel animator)))
+
+(def *animator* (agent (make-animator :function #'update-world)))
+
+(defn start-animator [panel]
+  (send-off *animator* start-animation *animator* panel))
+
+(defn stop-animator []
+  (send-off *animator* stop-animation))
+
 (defn box []
   (let [frame (JFrame. "My Box")
 	hello (JLabel. "Hello World")
-	panel (box-panel)]
+	panel (box-panel)
+	kbd-hdlr (key-listener *keyboard*)]
 
     (swap! *panel* (fn [_] panel))
+    (.addKeyListener panel kbd-hdlr)
+    (.setFocusable panel true)
 
     (doto frame
       (.add panel)
