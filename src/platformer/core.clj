@@ -72,7 +72,9 @@
 
 (defn p3d-int [p]
   (let [{:keys [x y z]} p]
-    (position3d. (int x) (int y) (int z))))
+    (position3d. (int x)
+		 (int y)
+		 (int z))))
 
 (defrecord particle
   [position
@@ -122,7 +124,6 @@
   (conj particle {:accum-force (p3d+ (:accum-force particle) force)}))
 
 (defn make-spring-force [p1 p2 k rest-length]
-  "the generated function is a mutator"
   (fn [duration]
     (swap! p1
      (fn [p] (add-force p (compute-spring-force p @p2 k rest-length))))))
@@ -157,13 +158,6 @@
 ;; bound dynamically to the current graphics context
 (def *g* nil)
 (def *panel* (atom nil))
-
-(defmulti draw-object type)
-
-(defmethod draw-object circle-rec [obj]
-  (let [pos (game-position obj)
-	rad (:radius obj)]
-    (.draw *g* (Ellipse2D$Double. (:x pos) (:y pos) rad rad))))
 
 (defrecord animator
   [enabled
@@ -276,14 +270,18 @@
 	(:sprite *character*)))
 
 (def *scene*
-     [[[:grass :grass :grass :grass]
-       [:stone :stone :brown :grass]
-       [:stone :brown :brown :brown]
-       [:stone :dirt :dirt]]
-      [[:none :none :none :none]
-       [:tree-short :none :chest]
-       [:none :none :none :none]
-       [:none :dirt :dirt]]])
+     [[[:grass :grass :grass :stone :grass :grass]
+       [:grass :grass :grass :stone :grass :grass]
+       [:grass :stone :stone :stone :stone :stone]
+       [:grass :stone :brown :brown :grass :grass]
+       [:grass :stone :grass :dirt  :dirt  :dirt]
+       [:grass :stone :grass :dirt  :dirt  :dirt]]
+      [[:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :chest :tree-short :tree-short]
+       [:none  :none  :none  :none  :dirt]
+       [:none  :none  :none  :none  :dirt]]])
 
 (defn maybe-index [obj index]
   (if (and obj
