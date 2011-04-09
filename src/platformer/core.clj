@@ -204,13 +204,18 @@
     (let [tile (scene-index scene (tile-add tgt offset))]
       (not (shadower? tile)))))
 
+(def uncovered (absent [1 0 0]))
+
 (def *shadow-types*
      [(shadow-with :shadow-south-east
+		   uncovered
 		   (present [1 1 1])
 		   (absent [1 0 1]))
       (shadow-with :shadow-east
+		   uncovered
 		   (present [1 0 1]))
       (shadow-with :shadow-north-east
+		   uncovered
 		   (present [1 -1 1])
 		   (absent [1 -1 0])
 		   (absent [1 0 1]))
@@ -218,15 +223,20 @@
 		   (present [0 1 -1])
 		   (absent [0 1 0]))
       (shadow-with :shadow-south
+		   uncovered
 		   (present [1 1 0]))
       (shadow-with :shadow-north
+		   uncovered
 		   (present [1 -1 0]))
       (shadow-with :shadow-south-west
+		   uncovered
 		   (present [1 1 -1])
 		   (absent [1 0 -1]))
       (shadow-with :shadow-west
+		   uncovered
 		   (present [1 0 -1]))
       (shadow-with :shadow-north-west
+		   uncovered
 		   (present [1 -1 -1])
 		   (absent [1 -1 0])
 		   (absent [1 0 -1]))])
@@ -289,37 +299,59 @@ tile to a frame with the origin at the top left of the tile"
 
 (defn draw-tile [^Graphics2D g key pos]
   (if-let [img (key @*resources*)]
-    (let [[layeri rowi coli] pos
-	  p2d (tc-to-te
+    (let [p2d (tc-to-te
 	       (sc2d-to-g2d
-		(w3d-to-sc2d
-		 (position3d. coli (- rowi) layeri))))]
-
+		(w3d-to-sc2d pos)))]
+		
       (draw-img g (:img img) p2d))))
 
-(defn draw-world [^Graphics2D g]
+(defn- draw-order-pos3d [p1 p2]
+  (let [{y1 :y z1 :z} p1
+	{y2 :y z2 :z} p2]
+    (and (> y1 y2) (< z1 z2))))
 
-  ;; draw shadows on the lowest level
-  (let [ground (first *scene*)
+(defn execute-draw [^Graphics2D g commands]
+  (let [{:keys [background active overlay]} commands]
+    ;; draw background objects in order given
+    (doseq [[pos tile] background]
+      (draw-tile g tile pos))
+
+    ;; sort-then-draw the active tiles
+    (let [active (sort-by first draw-order-pos3d active)]
+      (doseq [[pos & tiles] active]
+	(doseq [tile tiles]
+	  (draw-tile g tile pos))))
+
+    ;; ignore overlay
+    ))
+
+(defn scene-to-commands [scene]
+  (for [[layer layeri] (zip *scene* (range (count scene)))
+	[row rowi] (zip layer (range (count layer)))
+	[img-key coli] (zip row (range (count row)))]
+    (concat
+     (list (position3d. coli (- rowi) layeri) img-key)
+     (if (shadower? img-key)
+       (shadow-types scene (make-scene-index layeri rowi coli))
+       nil))))
+
+(defn- decr-all [coll]
+  (map #(- % 1) coll))
+
+(defn generate-background-shadow-commands [scene]
+  (let [ground (first scene)
 	grows (count ground)
 	gcols (apply max (map count ground))]
-    (dotimes [rii (+ grows 2)]
-      (dotimes [cii (+ gcols 2)]
-	(let [pos (make-scene-index -1 (- rii 1) (- cii 1))]
-	  (doseq [shadow (shadow-types *scene* pos)]
-	    (draw-tile g shadow pos))))))
+    (for [rii (decr-all (range (+ grows 2)))
+	  cii (decr-all (range (+ gcols 2)))
+	  shadow (shadow-types scene (make-scene-index -1 rii cii))]
+      (list (position3d. cii (- rii) -1)
+	    shadow))))
 
-  ;; stack the tiles and shadows
-  (doseq [[layer layeri] (zip *scene* (range (count *scene*)))
-	  [row rowi] (zip layer (range (count layer)))
-	  [img-key coli] (zip row (range (count row)))]
-
-    (let [pos (make-scene-index layeri rowi coli)]
-      (draw-tile g img-key pos)
-      (if (shadower? img-key)
-	(doseq [shadow (shadow-types *scene* (make-scene-index layeri rowi coli))]
-	  (draw-tile g shadow pos))))))
-
+(defn draw-world [^Graphics2D g]
+  (execute-draw g {:background (generate-background-shadow-commands *scene*)
+		   :active (scene-to-commands *scene*)}))
+		
 (defn- box-panel []
   (proxy [JPanel] []
     (getPreferredSize [] (Dimension. *width* *height*))
