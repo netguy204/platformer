@@ -376,7 +376,7 @@
   (:position @*camera*))
 
 
-(defn- keyboard-unit-force []
+(defn- keyboard-unit-vector []
   (let [f (reduce p3d+
 	    [(if (up-pressed) (position3d. 0 1 0) *zero-vector*)
 	     (if (down-pressed) (position3d. 0 -1 0) *zero-vector*)
@@ -385,17 +385,38 @@
     (if (< (p3d-mag f) 0.001) *zero-vector*
 	(p3d-unit f))))
 
-(defn make-keyboard-force [p f]
+(defn- velocity-scaled-force [particle max-force max-speed]
+  (let [vel (:velocity particle)
+	spd (p3d-mag vel)
+	force-mag (- max-force (* (/ max-force max-speed) spd))]
+    force-mag))
+
+(defn make-keyboard-force [p f-max v-max]
   (fn [duration]
     (swap! p
-     (fn [p] (add-force p (p3d-scale (keyboard-unit-force) f))))))
+     (fn [p] (add-force p (p3d-scale (keyboard-unit-vector)
+				     (velocity-scaled-force p f-max v-max)))))))
+
+(defn make-drag-force [p coeff stick-speed]
+  (fn [duration]
+    (swap! p
+      (fn [p]
+	(let [v (:velocity p)
+	      s (p3d-mag v)
+	      p2 (add-force p (p3d-scale v (- (* coeff))))]
+
+	  (if (< s stick-speed)
+	    (conj p2 {:velocity *zero-vector*})
+	    p2))))))
 
 (def *force-generators*
      [(make-spring-force *camera* (:particle *character*) 1 0.2)
-      (make-keyboard-force (:particle *character*) 120)])
+      (make-keyboard-force (:particle *character*) 2000 2)
+      (make-drag-force (:particle *character*) 60 0.2)])
 
 (def *particles*
-     [*camera* (:particle *character*)])
+     [*camera*
+      (:particle *character*)])
 
 (defn w3d-to-sc2d [pos3d]
   (let [{xc :x yc :y zc :z} (p3d- pos3d (camera-position))
