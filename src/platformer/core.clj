@@ -266,7 +266,7 @@
     (map (fn [collision]
 	   (conj collision
 		 {:sep-vel (particle-collision-sep-velocity particle collision)
-		  :restitution 0.3}))
+		  :restitution 0.8}))
 	 collisions)))
 
 (defn velocity-from-accel [particle contact duration]
@@ -696,13 +696,10 @@ tile to a frame with the origin at the top left of the tile"
 
 (defn- draw-order-pos3d [p1 p2]
   (let [{y1 :y z1 :z} p1
-	{y2 :y z2 :z} p2]
-    (cond
-     (and (= y1 y2) (= z1 z2)) 0
-     (< z1 z2) -1
-     (> z1 z2) 1
-     (> y1 y2) -1
-     true 1)))
+	{y2 :y z2 :z} p2
+	view-plane-dist1 (+ (* y1 y1) (* z1 z1 8))
+	view-plane-dist2 (+ (* y2 y2) (* z2 z2 8))]
+    (compare view-plane-dist1 view-plane-dist2)))
 
 (defn execute-draw [^Graphics2D g commands]
   (binding [current-camera-position (camera-position)]
