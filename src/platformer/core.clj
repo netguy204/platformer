@@ -565,6 +565,19 @@
 
     new-commands))
 
+(defn- decr-all [coll]
+  (map #(- % 1) coll))
+
+(defn generate-background-shadow-commands [scene]
+  (let [ground (first scene)
+	grows (count ground)
+	gcols (apply max (map count ground))]
+    (for [rii (decr-all (range (+ grows 2)))
+	  cii (decr-all (range (+ gcols 2)))
+	  shadow (shadow-types scene (make-scene-index -1 rii cii))]
+      (list (position3d. cii (- rii) -1)
+	    shadow))))
+
 ;; TODO: bake *scene-keys* into *scene-commands*
 (def *scene-commands* (atom nil))
 (def *shadow-commands* (atom nil))
@@ -706,19 +719,6 @@ tile to a frame with the origin at the top left of the tile"
 
       ;; ignore overlay
       )))
-
-(defn- decr-all [coll]
-  (map #(- % 1) coll))
-
-(defn generate-background-shadow-commands [scene]
-  (let [ground (first scene)
-	grows (count ground)
-	gcols (apply max (map count ground))]
-    (for [rii (decr-all (range (+ grows 2)))
-	  cii (decr-all (range (+ gcols 2)))
-	  shadow (shadow-types scene (make-scene-index -1 rii cii))]
-      (list (position3d. cii (- rii) -1)
-	    shadow))))
 
 (defn draw-world [^Graphics2D g]
   (execute-draw g {:background @*shadow-commands*
