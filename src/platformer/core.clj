@@ -21,8 +21,14 @@
        [:none  :none  :none  :none  :none]
        [:none  :none  :none  :none  :none]
        [:none  :none  :chest :tree-short :tree-short]
-       [:none  :none  :none  :none  :dirt]
-       [:none  :none  :none  :none  :dirt]]])
+       [:none  :none  :none  :none  :dirt :dirt]
+       [:none  :none  :none  :none  :dirt :dirt]]
+      [[:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none :dirt]
+       [:none  :none  :none  :none  :none :dirt]]])
 
 ;; y-space is the vertical offset between stacked tiles
 ;; y-plane-space is the vertical offset between tiles in a plane
