@@ -599,20 +599,23 @@
     (if (< (p3d-mag f) 0.001) *zero-vector*
 	(p3d-unit f))))
 
-(defn- velocity-scaled-force [particle max-force max-speed]
-  (let [vel (:velocity particle)
-	spd (p3d-mag vel)
-	force-mag (- max-force (* (/ max-force max-speed) spd))]
+(defn- velocity-scaled-force [particle max-force max-speed direction]
+  (let [spd (p3d-dot (:velocity particle) direction)
+	force-mag (max 0 (- max-force (* (/ max-force max-speed) spd)))]
     force-mag))
 
 (defn make-keyboard-force [p f-max v-max]
   (fn [duration]
     (swap! p
      (fn [p]
-       (if (space-pressed)
-	 (add-velocity p (p3d-scale (position3d. 0 0 20) duration))
-	 (add-force p (p3d-scale (keyboard-unit-vector)
-				 (velocity-scaled-force p f-max v-max))))))))
+       (let [dir (keyboard-unit-vector)]
+	 (add-force p (p3d+
+		       (p3d-scale dir
+				  (velocity-scaled-force p f-max v-max dir))
+		       (if (space-pressed)
+			 (position3d. 0 0 2000)
+			 *zero-vector*))))))))
+
 
 (defn make-drag-force [p coeff stick-speed]
   (fn [duration]
@@ -636,7 +639,7 @@
      [(make-spring-force *camera* (:particle *character*) 10 0.2)
       (make-drag-force *camera* 5 0.1)
       (make-keyboard-force (:particle *character*) 2000 2)
-      (make-drag-force (:particle *character*) 20 0.2)
+      (make-drag-force (:particle *character*) 10 0.4)
       (make-gravity-force (:particle *character*) 10)])
 
 (def *particles*
