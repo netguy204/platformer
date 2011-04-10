@@ -10,7 +10,7 @@
 (def *width* 400)
 (def *height* 400)
 
-(def *scene*
+(def *scene-keys*
      [[[:grass :grass :grass :stone :grass :grass]
        [:grass :grass :grass :stone :grass :grass]
        [:grass :stone :stone :stone :stone :stone]
@@ -315,14 +315,14 @@
   (integrate-particles particles duration)
   (let [particle (:particle *character*)]
     (loop [count 0
-	   contacts (particle-scene-contacts @particle *scene*)]
+	   contacts (particle-scene-contacts @particle *scene-keys*)]
       (when (not (empty? contacts))
 	;;(println "step" count "contacts" contacts)
 	(swap! particle resolve-scene-contacts contacts duration)
 	(swap! particle resolve-scene-interpenetration contacts)
 	(if (< count *resolution-steps*)
 	  (recur (+ count 1)
-		 (particle-scene-contacts @particle *scene*)))))))
+		 (particle-scene-contacts @particle *scene-keys*)))))))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -393,20 +393,29 @@
 	y (:y pos)]
     (.drawImage g ^BufferedImage img (int x) (int y) obs)))
 
-(defn load-img-compat [resource]
-  (let [img (load-img resource)
-	width (.getWidth img)
+(defn create-compatible-image [img]
+  (let [width (.getWidth img)
 	height (.getHeight img)
 	img2 (-> @*panel*
 		 (.getGraphicsConfiguration)
-		 (.createCompatibleImage width height (.getTransparency img)))
+		 (.createCompatibleImage width height (.getTransparency img)))]
+
+    img2))
+
+(defn load-img-compat [resource]
+  (let [img (load-img resource)
+	img2 (create-compatible-image img)
 	g (.getGraphics img2)]
     (.drawImage g img 0 0 nil)
     img2))
 
-(defn- cute [img & {:keys [properties] :or {properties [:shadow :solid]}}]
-  {:img (load-img-compat (get-resource (str "cute/" img)))
+(defn- image-resource [img properties]
+  {:img img
    :properties properties})
+
+(defn- cute [img & {:keys [properties] :or {properties [:shadow :solid]}}]
+  (image-resource (load-img-compat (get-resource (str "cute/" img)))
+		  properties))
 
 (defn load-resources []
   (swap! *resources*
@@ -462,9 +471,7 @@
 	shadow-type))))
 
 (defn shadower? [tile]
-  (if tile
-    (let [res (tile @*resources*)]
-      (and res (:properties res) (some #{:shadow} (:properties res))))))
+  (if tile (some #{:shadow} (key-properties tile))))
 
 (defn present [offset]
   (fn [scene tgt]
@@ -520,7 +527,7 @@
 	  [] *shadow-types*))
 
 (defn scene-to-commands [scene]
-  (for [[layer layeri] (zip *scene* (range (count scene)))
+  (for [[layer layeri] (zip scene (range (count scene)))
 	[row rowi] (zip layer (range (count layer)))
 	[img-key coli] (zip row (range (count row)))]
     (concat
@@ -528,6 +535,41 @@
      (if (shadower? img-key)
        (shadow-types scene (make-scene-index layeri rowi coli))
        nil))))
+
+(defn- bake-image [keys]
+  (let [imgs (map #(:img (% @*resources*)) keys)
+	base (create-compatible-image (first imgs))
+	g (.getGraphics base)]
+    (doseq [img imgs]
+      (.drawImage g img 0 0 nil))
+    base))
+
+(defn baked-scene-commands [scene]
+  (let [commands (scene-to-commands scene)
+	new-resources (atom {})
+	new-commands
+	  (for [command commands
+		:when (not (= (second command) :none))]
+	    (if (= (count command) 2)
+	      command ;; no shadow, leave as is
+	      (let [base-key (second command)
+		    baked-img (bake-image (rest command))
+		    img-sym (gensym)]
+
+		;; store the new resource
+		(swap! *resources* conj {img-sym (image-resource
+						  baked-img
+						  (key-properties base-key))})
+		;; emit the new command
+		(list (first command) img-sym))))]
+
+    new-commands))
+
+;; TODO: bake *scene-keys* into *scene-commands*
+(def *scene-commands* (atom nil))
+
+(defn bake-scene-commands []
+  (swap! *scene-commands* (fn [_] (baked-scene-commands *scene-keys*))))
 
 ;; position of the camera in world coordinates the origin of world
 ;; coordinates is the bottom back left surface of the top left tile in
@@ -672,8 +714,8 @@ tile to a frame with the origin at the top left of the tile"
 	    shadow))))
 
 (defn draw-world [^Graphics2D g]
-  (execute-draw g {:background (generate-background-shadow-commands *scene*)
-		   :active (conj (scene-to-commands *scene*)
+  (execute-draw g {:background (generate-background-shadow-commands *scene-keys*)
+		   :active (conj @*scene-commands*
 				 (character-position))}))
 
 (defn- box-panel []
@@ -734,5 +776,6 @@ tile to a frame with the origin at the top left of the tile"
 (defn -main [& args]
   (box)
   (load-resources)
+  (bake-scene-commands)
   (start-animator @*panel*))
 
