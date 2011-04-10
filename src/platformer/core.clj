@@ -10,6 +10,20 @@
 (def *width* 400)
 (def *height* 400)
 
+(def *scene*
+     [[[:grass :grass :grass :stone :grass :grass]
+       [:grass :grass :grass :stone :grass :grass]
+       [:grass :stone :stone :stone :stone :stone]
+       [:grass :stone :brown :brown :grass :grass]
+       [:grass :stone :grass :dirt  :dirt  :dirt]
+       [:grass :stone :grass :dirt  :dirt  :dirt]]
+      [[:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :none  :none  :none]
+       [:none  :none  :chest :tree-short :tree-short]
+       [:none  :none  :none  :none  :dirt]
+       [:none  :none  :none  :none  :dirt]]])
+
 ;; y-space is the vertical offset between stacked tiles
 ;; y-plane-space is the vertical offset between tiles in a plane
 (def *x-space* 100)
@@ -17,6 +31,7 @@
 (def *y-plane-space* 80)
 
 (def *keyboard* (atom {}))
+(def *resources* (atom {}))
 
 (defn left-pressed []
   (@*keyboard* (KeyEvent/VK_LEFT)))
@@ -89,6 +104,15 @@
 				      inverse-mass 0}}]
   (particle. position velocity damping *zero-vector* inverse-mass))
 
+(def *character* {:particle (atom (make-particle (position3d. 2.7 -2 1)
+						 :inverse-mass (/ 100)
+						 :damping 0.90))
+		  :sprite :character-boy})
+
+(defn character-position []
+  (list (:position @(:particle *character*))
+	(:sprite *character*)))
+
 (defn integrate [particle duration]
   (let [{:keys [position velocity damping accum-force inverse-mass]} particle
 	acceleration (p3d-scale accum-force inverse-mass)
@@ -121,6 +145,9 @@
 (defn add-force [particle force]
   (conj particle {:accum-force (p3d+ (:accum-force particle) force)}))
 
+(defn add-velocity [particle vel]
+  (conj particle {:velocity (p3d+ (:velocity particle) vel)}))
+
 (defn make-spring-force [p1 p2 k rest-length]
   (fn [duration]
     (swap! p1
@@ -138,10 +165,80 @@
   (doseq [particle particles]
     (swap! particle reset-force)))
 
+(defn signum [x]
+  (cond
+   (> x 0) 1
+   (< x 0) -1
+   true 0))
+
+(defn max-component-under-limit [vector limit]
+  (first (filter #(< (Math/abs (second %)) limit)
+		 (sort-by #(Math/abs (second %)) > vector))))
+
+(defn unit-aabb-collide [p1 p2]
+  (let [diff (p3d- p1 p2)
+	dmag2 (p3d-mag2 diff)]
+    (if (< dmag2 1)
+      (let [min-component (max-component-under-limit diff 1)
+	    sign (signum (second min-component))
+	    depth (- 1 (Math/abs (second min-component)))]
+
+	(case (first min-component)
+	  :x {:depth depth
+	      :normal (position3d. sign 0 0)}
+	  :y {:depth depth
+	      :normal (position3d. 0 sign 0)}
+	  :z {:depth depth
+	      :normal (position3d. 0 0 sign)})))))
+
+(defn key-properties [key]
+  (:properties (key @*resources*)))
+
+(defn collideable? [key]
+  (some #{:solid} (key-properties key)))
+
+(defn particle-point-sep-velocity [particle point]
+  (let [to-part (p3d-unit (p3d- (:position particle) point))]
+    (p3d-dot to-part (:velocity particle))))
+
+(defn particle-collision-sep-velocity [particle collision]
+  (let [normal (:normal collision)]
+    (p3d-dot normal (:velocity particle))))
+
+;; temporary pre-definition
+(def scene-to-commands identity)
+
+(defn particle-scene-contacts [particle scene]
+  (let [targets (filter (comp collideable? second) (scene-to-commands scene))
+	targets-pos (map first targets)
+	char-pos (:position particle)
+	collisions (filter (comp not nil?)
+			   (map #(unit-aabb-collide char-pos %)
+				targets-pos))]
+    (map (fn [collision]
+	   (conj collision
+		 {:sep-vel (particle-collision-sep-velocity particle collision)
+		  :restitution 0.8}))
+	 collisions)))
+
+(defn resolve-scene-contacts [particle scene]
+  (reduce (fn [result contact]
+	    (let [{:keys [normal sep-vel depth restitution]} contact]
+	      (if (> sep-vel 0)
+		result ;; contraint is being resolved
+		(let [{:keys [inverse-mass]} particle
+		      delta-vel (- (* sep-vel (+ 1 restitution)))
+		      impulse (p3d-scale normal delta-vel)]
+		  (add-velocity particle impulse)))))
+
+	  particle
+	  (particle-scene-contacts particle scene)))
+
 (defn physics-update [particles generators duration]
   (reset-forces particles)
   (apply-forces generators duration)
-  (integrate-particles particles duration))
+  (integrate-particles particles duration)
+  (swap! (:particle *character*) resolve-scene-contacts *scene*))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -210,8 +307,6 @@
 	y (:y pos)]
     (.drawImage g ^BufferedImage img (int x) (int y) obs)))
 
-(def *resources* (atom {}))
-
 (defn load-img-compat [resource]
   (let [img (load-img resource)
 	width (.getWidth img)
@@ -223,7 +318,7 @@
     (.drawImage g img 0 0 nil)
     img2))
 
-(defn- cute [img & {:keys [properties] :or {properties [:shadow]}}]
+(defn- cute [img & {:keys [properties] :or {properties [:shadow :solid]}}]
   {:img (load-img-compat (get-resource (str "cute/" img)))
    :properties properties})
 
@@ -257,29 +352,6 @@
      (dotimes [item# seq2#]
        (let [[~var ~idx] item#]
 	 ~@body))))
-
-(def *character* {:particle (atom (make-particle (position3d. 2.7 -2 1)
-						 :inverse-mass (/ 100)
-						 :damping 0.90))
-		  :sprite :character-boy})
-
-(defn character-position []
-  (list (:position @(:particle *character*))
-	(:sprite *character*)))
-
-(def *scene*
-     [[[:grass :grass :grass :stone :grass :grass]
-       [:grass :grass :grass :stone :grass :grass]
-       [:grass :stone :stone :stone :stone :stone]
-       [:grass :stone :brown :brown :grass :grass]
-       [:grass :stone :grass :dirt  :dirt  :dirt]
-       [:grass :stone :grass :dirt  :dirt  :dirt]]
-      [[:none  :none  :none  :none  :none]
-       [:none  :none  :none  :none  :none]
-       [:none  :none  :none  :none  :none]
-       [:none  :none  :chest :tree-short :tree-short]
-       [:none  :none  :none  :none  :dirt]
-       [:none  :none  :none  :none  :dirt]]])
 
 (defn maybe-index [obj index]
   (if (and obj
@@ -360,6 +432,16 @@
 	     (conj %1 result)
 	     %1)
 	  [] *shadow-types*))
+
+(defn scene-to-commands [scene]
+  (for [[layer layeri] (zip *scene* (range (count scene)))
+	[row rowi] (zip layer (range (count layer)))
+	[img-key coli] (zip row (range (count row)))]
+    (concat
+     (list (position3d. coli (- rowi) layeri) img-key)
+     (if (shadower? img-key)
+       (shadow-types scene (make-scene-index layeri rowi coli))
+       nil))))
 
 ;; position of the camera in world coordinates the origin of world
 ;; coordinates is the bottom back left surface of the top left tile in
@@ -475,16 +557,6 @@ tile to a frame with the origin at the top left of the tile"
 
     ;; ignore overlay
     ))
-
-(defn scene-to-commands [scene]
-  (for [[layer layeri] (zip *scene* (range (count scene)))
-	[row rowi] (zip layer (range (count layer)))
-	[img-key coli] (zip row (range (count row)))]
-    (concat
-     (list (position3d. coli (- rowi) layeri) img-key)
-     (if (shadower? img-key)
-       (shadow-types scene (make-scene-index layeri rowi coli))
-       nil))))
 
 (defn- decr-all [coll]
   (map #(- % 1) coll))
