@@ -33,17 +33,23 @@
 (def *keyboard* (atom {}))
 (def *resources* (atom {}))
 
+(defn key-pressed [key]
+  (@*keyboard* key))
+
 (defn left-pressed []
-  (@*keyboard* (KeyEvent/VK_LEFT)))
+  (key-pressed (KeyEvent/VK_LEFT)))
 
 (defn right-pressed []
-  (@*keyboard* (KeyEvent/VK_RIGHT)))
+  (key-pressed (KeyEvent/VK_RIGHT)))
 
 (defn up-pressed []
-  (@*keyboard* (KeyEvent/VK_UP)))
+  (key-pressed (KeyEvent/VK_UP)))
 
 (defn down-pressed []
-  (@*keyboard* (KeyEvent/VK_DOWN)))
+  (key-pressed (KeyEvent/VK_DOWN)))
+
+(defn space-pressed []
+  (key-pressed (KeyEvent/VK_SPACE)))
 
 (defrecord position-rec
   [x y])
@@ -104,7 +110,7 @@
 				      inverse-mass 0}}]
   (particle. position velocity damping *zero-vector* inverse-mass))
 
-(def *character* {:particle (atom (make-particle (position3d. 2.7 -2 1)
+(def *character* {:particle (atom (make-particle (position3d. 2.4 -4.3 1)
 						 :inverse-mass (/ 100)
 						 :damping 0.90))
 		  :sprite :character-boy})
@@ -148,6 +154,9 @@
 (defn add-velocity [particle vel]
   (conj particle {:velocity (p3d+ (:velocity particle) vel)}))
 
+(defn add-position [particle pos]
+  (conj particle {:position (p3d+ (:position particle) pos)}))
+
 (defn make-spring-force [p1 p2 k rest-length]
   (fn [duration]
     (swap! p1
@@ -175,21 +184,49 @@
   (first (filter #(< (Math/abs (second %)) limit)
 		 (sort-by #(Math/abs (second %)) > vector))))
 
-(defn unit-aabb-collide [p1 p2]
+(defn unit-aabb-test [p1 p2]
   (let [diff (p3d- p1 p2)
-	dmag2 (p3d-mag2 diff)]
-    (if (< dmag2 1)
-      (let [min-component (max-component-under-limit diff 1)
-	    sign (signum (second min-component))
+	{:keys [x y z]} diff]
+    (and (< (Math/abs x) 1)
+	 (< (Math/abs y) 1)
+	 (< (Math/abs z) 1))))
+
+(defn unit-aabb-collide [p1 p2]
+  (when (unit-aabb-test p1 p2)
+    (let [displacement (p3d- p1 p2)
+	  directions (map (fn [normal]
+			    {:normal normal
+			     :depth (let [proj (p3d-dot displacement normal)]
+				      (if (and (>= proj 0) (< proj 1))
+					(- 1 proj)
+					0))})
+			  [(position3d. 1 0 0) (position3d. -1 0 0)
+			   (position3d. 0 1 0) (position3d. 0 -1 0)
+			   (position3d. 0 0 1) (position3d. 0 0 -1)])]
+      ;; min positive depth less than 1
+      (reduce (fn [result direction]
+		(if (> (:depth direction) 0)
+		  (cond
+		   (nil? result) direction
+		   (< (:depth direction) (:depth result)) direction
+		   true result)
+		  result))
+	      nil
+	      directions))))
+
+(defn unit-aabb-collide [p1 p2]
+  (let [diff (p3d- p1 p2)]
+    (if-let [min-component (max-component-under-limit diff 1)]
+      (let [sign (signum (second min-component))
 	    depth (- 1 (Math/abs (second min-component)))]
 
 	(case (first min-component)
-	  :x {:depth depth
-	      :normal (position3d. sign 0 0)}
-	  :y {:depth depth
-	      :normal (position3d. 0 sign 0)}
-	  :z {:depth depth
-	      :normal (position3d. 0 0 sign)})))))
+	      :x {:depth depth
+		  :normal (position3d. sign 0 0)}
+	      :y {:depth depth
+		  :normal (position3d. 0 sign 0)}
+	      :z {:depth depth
+		  :normal (position3d. 0 0 sign)})))))
 
 (defn key-properties [key]
   (:properties (key @*resources*)))
@@ -218,27 +255,56 @@
     (map (fn [collision]
 	   (conj collision
 		 {:sep-vel (particle-collision-sep-velocity particle collision)
-		  :restitution 0.8}))
+		  :restitution 0.3}))
 	 collisions)))
 
-(defn resolve-scene-contacts [particle scene]
+(defn velocity-from-accel [particle contact duration]
+  (let [{:keys [normal sep-vel]} contact
+	{:keys [accum-force inverse-mass]} particle
+	accel (p3d-scale accum-force inverse-mass)
+	normal-accel (p3d-dot accel normal)
+	expected-vel (* normal-accel duration)]
+
+    expected-vel))
+
+(defn resolve-scene-contacts [particle contacts duration]
   (reduce (fn [result contact]
 	    (let [{:keys [normal sep-vel depth restitution]} contact]
-	      (if (> sep-vel 0)
-		result ;; contraint is being resolved
-		(let [{:keys [inverse-mass]} particle
-		      delta-vel (- (* sep-vel (+ 1 restitution)))
-		      impulse (p3d-scale normal delta-vel)]
-		  (add-velocity particle impulse)))))
+	      (cond
+	       ;; if the seperating velocity is positive then
+	       ;; the contraint is being resolved
+	       (> sep-vel 0) result
+	       ;; if it looks like the velocity we have is due to 1
+	       ;; frame of acceleration towards the contact then we're
+	       ;; probably resting. Just offset velocity enough to
+	       ;; stop the motion towards the contact.
+	       ;; otherwise apply an impulse in the opposite direction
+	       ;; taking into account the coefficient of restitution
+	       ;; associated with this contact
+	       true
+	         (let [{:keys [inverse-mass]} particle
+		       delta-vel (- (* sep-vel restitution))
+		       impulse (p3d-scale normal delta-vel)]
+		   (add-velocity particle impulse)))))
 
-	  particle
-	  (particle-scene-contacts particle scene)))
+    particle
+    contacts))
+
+(defn resolve-scene-interpenetration [particle contacts]
+  (reduce (fn [result contact]
+	    (let [{:keys [depth normal]} contact]
+	      (add-position result (p3d-scale normal depth))))
+    particle
+    contacts))
 
 (defn physics-update [particles generators duration]
   (reset-forces particles)
   (apply-forces generators duration)
   (integrate-particles particles duration)
-  (swap! (:particle *character*) resolve-scene-contacts *scene*))
+  (let [particle (:particle *character*)
+	contacts (particle-scene-contacts @particle *scene*)]
+    (swap! particle resolve-scene-contacts contacts duration)
+    (swap! particle resolve-scene-interpenetration contacts)))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -288,7 +354,9 @@
 
 (defn- start-animation [animator agent panel]
   (send-off agent #'step-animator agent)
-  (conj animator {:enabled true :panel panel}))
+  (conj animator {:enabled true
+		  :panel panel
+		  :clock (System/currentTimeMillis)}))
 
 (defn get-resource [file]
   (println "getting resource " file)
@@ -476,8 +544,11 @@
 (defn make-keyboard-force [p f-max v-max]
   (fn [duration]
     (swap! p
-     (fn [p] (add-force p (p3d-scale (keyboard-unit-vector)
-				     (velocity-scaled-force p f-max v-max)))))))
+     (fn [p]
+       (if (space-pressed)
+	 (add-velocity p (p3d-scale (position3d. 0 0 20) duration))
+	 (add-force p (p3d-scale (keyboard-unit-vector)
+				 (velocity-scaled-force p f-max v-max))))))))
 
 (defn make-drag-force [p coeff stick-speed]
   (fn [duration]
@@ -491,10 +562,19 @@
 	    (conj p2 {:velocity *zero-vector*})
 	    p2))))))
 
+(defn make-gravity-force [p grav-constant]
+  (fn [duration]
+    (swap! p
+      (fn [p]
+	(add-force p (position3d. 0 0 (- (/ grav-constant
+					    (:inverse-mass p)))))))))
 (def *force-generators*
-     [(make-spring-force *camera* (:particle *character*) 1 0.2)
+     [(make-spring-force *camera* (:particle *character*) 10 0.2)
+      (make-drag-force *camera* 5 0.1)
       (make-keyboard-force (:particle *character*) 2000 2)
-      (make-drag-force (:particle *character*) 60 0.2)])
+      (make-drag-force (:particle *character*) 20 0.2)])
+
+;;      (make-gravity-force (:particle *character*) 10)])
 
 (def *particles*
      [*camera*
@@ -608,6 +688,11 @@ tile to a frame with the origin at the top left of the tile"
 (defn start-animator [panel]
   (send-off *animator* start-animation *animator* panel))
 
+(defn restart-animator []
+  (if (agent-errors *animator*)
+    (restart-agent *animator* @*animator*))
+  (send-off *animator* start-animation *animator* @*panel*))
+
 (defn stop-animator []
   (send-off *animator* stop-animation))
 
@@ -624,10 +709,10 @@ tile to a frame with the origin at the top left of the tile"
     (doto frame
       (.add panel)
       (.pack)
-      (.setVisible true))
-    (start-animator panel)))
+      (.setVisible true))))
 
 (defn -main [& args]
   (box)
-  (load-resources))
+  (load-resources)
+  (start-animator @*panel*))
 
