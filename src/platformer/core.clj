@@ -567,9 +567,13 @@
 
 ;; TODO: bake *scene-keys* into *scene-commands*
 (def *scene-commands* (atom nil))
+(def *shadow-commands* (atom nil))
 
 (defn bake-scene-commands []
-  (swap! *scene-commands* (fn [_] (baked-scene-commands *scene-keys*))))
+  (swap! *scene-commands*
+	 (fn [_] (baked-scene-commands *scene-keys*)))
+  (swap! *shadow-commands*
+	 (fn [_] (generate-background-shadow-commands *scene-keys*))))
 
 ;; position of the camera in world coordinates the origin of world
 ;; coordinates is the bottom back left surface of the top left tile in
@@ -714,7 +718,7 @@ tile to a frame with the origin at the top left of the tile"
 	    shadow))))
 
 (defn draw-world [^Graphics2D g]
-  (execute-draw g {:background (generate-background-shadow-commands *scene-keys*)
+  (execute-draw g {:background @*shadow-commands*
 		   :active (conj @*scene-commands*
 				 (character-position))}))
 
