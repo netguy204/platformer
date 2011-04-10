@@ -91,9 +91,11 @@
 (defn p3d-unit [p]
   (p3d-scale p (/ (p3d-mag p))))
 
-(defn p3d-int [p]
+(defn p3d-round [p]
   (let [{:keys [x y z]} p]
-    (position3d. x y z)))
+    (position3d. (Math/round (float x))
+		 (Math/round (float y))
+		 (Math/round (float z)))))
 
 (defrecord particle
   [position
@@ -214,20 +216,6 @@
 	      nil
 	      directions))))
 
-(defn unit-aabb-collide [p1 p2]
-  (let [diff (p3d- p1 p2)]
-    (if-let [min-component (max-component-under-limit diff 1)]
-      (let [sign (signum (second min-component))
-	    depth (- 1 (Math/abs (second min-component)))]
-
-	(case (first min-component)
-	      :x {:depth depth
-		  :normal (position3d. sign 0 0)}
-	      :y {:depth depth
-		  :normal (position3d. 0 sign 0)}
-	      :z {:depth depth
-		  :normal (position3d. 0 0 sign)})))))
-
 (defn key-properties [key]
   (:properties (key @*resources*)))
 
@@ -242,13 +230,36 @@
   (let [normal (:normal collision)]
     (p3d-dot normal (:velocity particle))))
 
-;; temporary pre-definition
+;; temporary pre-definitions
 (def scene-to-commands identity)
+(def scene-index identity)
+(def make-scene-index identity)
+
+(def *subscene-offsets*
+     (for [x (range 3)
+	   y (range 3)
+	   z (range 3)]
+       (position3d. (- x 1) (- y 1) (- z 1))))
+
+(defn p3d-tile-index [pos scene]
+  (let [{:keys [x y z]} pos
+	layeri (int z)
+	rowi (- (int y))
+	coli (int x)]
+    (scene-index scene (make-scene-index layeri rowi coli))))
+
+(defn simple-subscene [pos scene]
+  (let [pos-round (p3d-round pos)]
+    (for [off-pos (map #(p3d+ pos-round %) *subscene-offsets*)
+	  :let [img-key (p3d-tile-index off-pos scene)]
+	  :when (and img-key (collideable? img-key))]
+      (list off-pos img-key))))
+
 
 (defn particle-scene-contacts [particle scene]
-  (let [targets (filter (comp collideable? second) (scene-to-commands scene))
+  (let [char-pos (:position particle)
+	targets (filter (comp collideable? second) (simple-subscene char-pos scene))
 	targets-pos (map first targets)
-	char-pos (:position particle)
 	collisions (filter (comp not nil?)
 			   (map #(unit-aabb-collide char-pos %)
 				targets-pos))]
@@ -268,43 +279,50 @@
     expected-vel))
 
 (defn resolve-scene-contacts [particle contacts duration]
-  (reduce (fn [result contact]
-	    (let [{:keys [normal sep-vel depth restitution]} contact]
-	      (cond
-	       ;; if the seperating velocity is positive then
-	       ;; the contraint is being resolved
-	       (> sep-vel 0) result
-	       ;; if it looks like the velocity we have is due to 1
-	       ;; frame of acceleration towards the contact then we're
-	       ;; probably resting. Just offset velocity enough to
-	       ;; stop the motion towards the contact.
-	       ;; otherwise apply an impulse in the opposite direction
-	       ;; taking into account the coefficient of restitution
-	       ;; associated with this contact
-	       true
-	         (let [{:keys [inverse-mass]} particle
-		       delta-vel (- (* sep-vel restitution))
-		       impulse (p3d-scale normal delta-vel)]
-		   (add-velocity particle impulse)))))
-
-    particle
-    contacts))
+  (if (empty? contacts) particle
+      ;; just resolve the most severe contact
+      (let [strongest (apply min-key :sep-vel contacts)]
+	(let [{:keys [normal sep-vel depth restitution]} strongest]
+	  (cond
+	   ;; if the seperating velocity is positive then
+	   ;; the contraint is being resolved
+	   (> sep-vel 0) particle
+	   ;; if it looks like the velocity we have is due to 1
+	   ;; frame of acceleration towards the contact then we're
+	   ;; probably resting. Just offset velocity enough to
+	   ;; stop the motion towards the contact.
+	   ;; otherwise apply an impulse in the opposite direction
+	   ;; taking into account the coefficient of restitution
+	   ;; associated with this contact
+	   true
+	   (let [{:keys [inverse-mass]} particle
+		 delta-vel (- (* sep-vel restitution))
+		 impulse (p3d-scale normal delta-vel)]
+	     (add-velocity particle impulse)))))))
 
 (defn resolve-scene-interpenetration [particle contacts]
-  (reduce (fn [result contact]
-	    (let [{:keys [depth normal]} contact]
-	      (add-position result (p3d-scale normal depth))))
-    particle
-    contacts))
+  (if (empty? contacts) particle
+      ;; just resolve the most severe penetration
+      (let [strongest (apply min-key :depth contacts)]
+	(let [{:keys [depth normal]} strongest]
+	  (add-position particle (p3d-scale normal depth))))))
+
+(def *resolution-steps* 3)
 
 (defn physics-update [particles generators duration]
   (reset-forces particles)
   (apply-forces generators duration)
   (integrate-particles particles duration)
-  (let [particle (:particle *character*)
-	contacts (particle-scene-contacts @particle *scene*)]
-    (swap! particle resolve-scene-contacts contacts duration)
-    (swap! particle resolve-scene-interpenetration contacts)))
+  (let [particle (:particle *character*)]
+    (loop [count 0
+	   contacts (particle-scene-contacts @particle *scene*)]
+      (when (not (empty? contacts))
+	;;(println "step" count "contacts" contacts)
+	(swap! particle resolve-scene-contacts contacts duration)
+	(swap! particle resolve-scene-interpenetration contacts)
+	(if (< count *resolution-steps*)
+	  (recur (+ count 1)
+		 (particle-scene-contacts @particle *scene*)))))))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -572,16 +590,17 @@
      [(make-spring-force *camera* (:particle *character*) 10 0.2)
       (make-drag-force *camera* 5 0.1)
       (make-keyboard-force (:particle *character*) 2000 2)
-      (make-drag-force (:particle *character*) 20 0.2)])
-
-;;      (make-gravity-force (:particle *character*) 10)])
+      (make-drag-force (:particle *character*) 20 0.2)
+      (make-gravity-force (:particle *character*) 10)])
 
 (def *particles*
      [*camera*
       (:particle *character*)])
 
+(def current-camera-position (camera-position))
+
 (defn w3d-to-sc2d [pos3d]
-  (let [{xc :x yc :y zc :z} (p3d- pos3d (camera-position))
+  (let [{xc :x yc :y zc :z} (p3d- pos3d current-camera-position)
 	y0 (* *y-space* zc)
 	y (+ y0 (* *y-plane-space* yc))
 	x (* *x-space* xc)]
@@ -614,8 +633,8 @@ tile to a frame with the origin at the top left of the tile"
       (draw-img g (:img img) p2d))))
 
 (defn- draw-order-pos3d [p1 p2]
-  (let [{y1 :y z1 :z} (p3d-int p1)
-	{y2 :y z2 :z} (p3d-int p2)]
+  (let [{y1 :y z1 :z} p1
+	{y2 :y z2 :z} p2]
     (cond
      (and (= y1 y2) (= z1 z2)) 0
      (< z1 z2) -1
@@ -624,19 +643,20 @@ tile to a frame with the origin at the top left of the tile"
      true 1)))
 
 (defn execute-draw [^Graphics2D g commands]
-  (let [{:keys [background active overlay]} commands]
-    ;; draw background objects in order given
-    (doseq [[pos tile] background]
-      (draw-tile g tile pos))
+  (binding [current-camera-position (camera-position)]
+    (let [{:keys [background active overlay]} commands]
+      ;; draw background objects in order given
+      (doseq [[pos tile] background]
+	(draw-tile g tile pos))
 
-    ;; sort-then-draw the active tiles
-    (let [active (sort-by first draw-order-pos3d active)]
-      (doseq [[pos & tiles] active]
-	(doseq [tile tiles]
-	  (draw-tile g tile pos))))
+      ;; sort-then-draw the active tiles
+      (let [active (sort-by first draw-order-pos3d active)]
+	(doseq [[pos & tiles] active]
+	  (doseq [tile tiles]
+	    (draw-tile g tile pos))))
 
-    ;; ignore overlay
-    ))
+      ;; ignore overlay
+      )))
 
 (defn- decr-all [coll]
   (map #(- % 1) coll))
