@@ -132,12 +132,19 @@
   (list (:position @(:particle *character*))
 	(:sprite *character*)))
 
-(def *chest* {:particle (atom nil)
+(def *chest1* {:particle (atom nil)
 	      :sprite :chest})
 
-(defn chest-command []
-     (list (:position @(:particle *chest*))
-	   (:sprite *chest*)))
+(defn chest1-command []
+     (list (:position @(:particle *chest1*))
+	   (:sprite *chest1*)))
+
+(def *chest2* {:particle (atom nil)
+	      :sprite :chest})
+
+(defn chest2-command []
+     (list (:position @(:particle *chest2*))
+	   (:sprite *chest2*)))
 
 (def *physical-particles* (atom []))
 
@@ -397,7 +404,7 @@
 
     (concat scene-contacts inter-particle-contacts)))
 
-(def *resolution-steps* 4)
+(def *resolution-steps* 6)
 
 (defn physics-update [particles generators duration]
   (reset-forces particles)
@@ -744,8 +751,10 @@
       (make-drag-force *camera* 5 0.1)
       (make-keyboard-force (:particle *character*) 2000 2)
       (make-drag-force (:particle *character*) 10 0.4)
-      (make-drag-force (:particle *chest*) 20 0.0)
-      (make-gravity-force (:particle *chest*) 10)
+      (make-drag-force (:particle *chest1*) 20 0.0)
+      (make-gravity-force (:particle *chest1*) 10)
+      (make-drag-force (:particle *chest2*) 20 0.0)
+      (make-gravity-force (:particle *chest2*) 10)
       (make-gravity-force (:particle *character*) 10)])
 
 (def current-camera-position (camera-position))
@@ -810,7 +819,8 @@ tile to a frame with the origin at the top left of the tile"
   (execute-draw g {:background @*shadow-commands*
 		   :active (conj @*scene-commands*
 				 (character-command)
-				 (chest-command))}))
+				 (chest1-command)
+				 (chest2-command))}))
 
 (defn- box-panel []
   (proxy [JPanel] []
@@ -874,9 +884,15 @@ tile to a frame with the origin at the top left of the tile"
 		     :inverse-mass (/ 100)
 		     :damping 0.90)))
 
-  (swap! (:particle *chest*)
+  (swap! (:particle *chest1*)
     (fn [_]
-      (make-particle (position3d. 2 -3 1)
+      (make-particle (position3d. 5 -5 3)
+		     :inverse-mass (/ 1000)
+		     :damping 0.90)))
+
+  (swap! (:particle *chest2*)
+    (fn [_]
+      (make-particle (position3d. 4 -4 2)
 		     :inverse-mass (/ 1000)
 		     :damping 0.90)))
 
@@ -888,7 +904,8 @@ tile to a frame with the origin at the top left of the tile"
 
   (swap! *physical-particles*
     (fn [_] [(:particle *character*)
-	     (:particle *chest*)]))
+	     (:particle *chest1*)
+	     (:particle *chest2*)]))
 
   (swap! *particles*
     (fn [_] (conj @*physical-particles* *camera*))))
