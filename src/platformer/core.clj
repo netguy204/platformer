@@ -16,11 +16,12 @@
        [:grass :stone :stone :stone :stone :stone]
        [:grass :stone :brown :brown :grass :grass]
        [:grass :stone :grass :dirt  :dirt  :dirt]
+       [:grass :stone :grass :dirt  :dirt  :dirt]
        [:grass :stone :grass :dirt  :dirt  :dirt]]
       [[:none  :none  :none  :none  :none]
        [:none  :none  :none  :none  :none]
        [:none  :none  :none  :none  :none]
-       [:none  :none  :chest :tree-short :tree-short]
+       [:none  :none  :none :tree-short :tree-short]
        [:none  :none  :none  :none  :dirt :dirt]
        [:none  :none  :none  :none  :dirt :dirt]]
       [[:none  :none  :none  :none  :none]
@@ -69,6 +70,9 @@
 (defrecord position3d
   [x y z])
 
+(defn position3d? [obj]
+  (= (type obj) position3d))
+
 (defn p3d- [p1 p2]
   (let [{x1 :x y1 :y z1 :z} p1
 	{x2 :x y2 :y z2 :z} p2]
@@ -110,6 +114,9 @@
    accum-force
    inverse-mass])
 
+(defn particle? [obj]
+  (= (type obj) particle))
+
 (def *zero-vector* (position3d. 0 0 0))
 
 (defn make-particle [position & {:keys [velocity damping inverse-mass]
@@ -118,14 +125,21 @@
 				      inverse-mass 0}}]
   (particle. position velocity damping *zero-vector* inverse-mass))
 
-(def *character* {:particle (atom (make-particle (position3d. 2.4 -4.3 1)
-						 :inverse-mass (/ 100)
-						 :damping 0.90))
+(def *character* {:particle (atom nil)
 		  :sprite :character-boy})
 
-(defn character-position []
+(defn character-command []
   (list (:position @(:particle *character*))
 	(:sprite *character*)))
+
+(def *chest* {:particle (atom nil)
+	      :sprite :chest})
+
+(defn chest-command []
+     (list (:position @(:particle *chest*))
+	   (:sprite *chest*)))
+
+(def *physical-particles* (atom []))
 
 (defn integrate [particle duration]
   (let [{:keys [position velocity damping accum-force inverse-mass]} particle
@@ -261,10 +275,18 @@
 	  :when (and img-key (collideable? img-key))]
       (list off-pos img-key))))
 
+(defn unit-aabb-particle-contact [p1 p2]
+  (if-let [collision (unit-aabb-collide (:position p1)
+					(:position p2))]
+    (let [rel-vel (p3d- (:velocity p1) (:velocity p2))
+	  sep-vel (p3d-dot rel-vel (:normal collision))]
+      (conj collision
+	    {:sep-vel sep-vel
+	     :restitution 0.3}))))
 
 (defn particle-scene-contacts [particle scene]
   (let [char-pos (:position particle)
-	targets (filter (comp collideable? second) (simple-subscene char-pos scene))
+	targets (simple-subscene char-pos scene)
 	targets-pos (map first targets)
 	collisions (filter (comp not nil?)
 			   (map #(unit-aabb-collide char-pos %)
@@ -272,23 +294,30 @@
     (map (fn [collision]
 	   (conj collision
 		 {:sep-vel (particle-collision-sep-velocity particle collision)
-		  :restitution 0.8}))
+		  :restitution 0.3}))
 	 collisions)))
 
-(defn velocity-from-accel [particle contact duration]
+(defn velocity-from-accel [contact duration]
   (let [{:keys [normal sep-vel]} contact
-	{:keys [accum-force inverse-mass]} particle
-	accel (p3d-scale accum-force inverse-mass)
-	normal-accel (p3d-dot accel normal)
-	expected-vel (* normal-accel duration)]
+	refs (:refs contact)
 
-    expected-vel))
+	p1 @(first refs)
+	a1 (p3d-scale (:accum-force p1) (:inverse-mass p1))
 
-(defn resolve-scene-contacts [particle contacts duration]
+	p2r (second refs)
+	a2 (or (and p2r (p3d-scale (:accum-force @p2r) (:inverse-mass @p2r)))
+	       *zero-vector*)
+
+	rel-acc (p3d- a1 a2)
+	acc-caused-sep-vel (* (p3d-dot rel-acc normal) duration)]
+
+    acc-caused-sep-vel))
+
+(defn resolve-scene-contacts [contacts duration]
   (if (empty? contacts) particle
       ;; just resolve the most severe contact
       (let [strongest (apply min-key :sep-vel contacts)]
-	(let [{:keys [normal sep-vel depth restitution]} strongest]
+	(let [{:keys [normal sep-vel depth restitution refs]} strongest]
 	  (cond
 	   ;; if the seperating velocity is positive then
 	   ;; the contraint is being resolved
@@ -301,19 +330,72 @@
 	   ;; taking into account the coefficient of restitution
 	   ;; associated with this contact
 	   true
-	   (let [{:keys [inverse-mass]} particle
-		 delta-vel (- (* sep-vel restitution))
-		 impulse (p3d-scale normal delta-vel)]
-	     (add-velocity particle impulse)))))))
+	   (let [refs (:refs strongest)
+		 im1 (:inverse-mass @(first refs))
+		 im2 (or (and (second refs) (:inverse-mass @(second refs)))
+			 0)
+		 tim (+ im1 im2)]
+	     (when (> tim 0)
+	       (let [new-sep-vel (- (* sep-vel restitution))
+		     new-sep-vel (+ new-sep-vel
+				    (* (min
+					(velocity-from-accel strongest duration)
+					0)
+				       restitution))
+		     delta-vel (- new-sep-vel sep-vel)
+		     impulse-per-mass (p3d-scale normal (/ delta-vel tim))]
 
-(defn resolve-scene-interpenetration [particle contacts]
-  (if (empty? contacts) particle
-      ;; just resolve the most severe penetration
-      (let [strongest (apply min-key :depth contacts)]
-	(let [{:keys [depth normal]} strongest]
-	  (add-position particle (p3d-scale normal depth))))))
+		 (swap! (first refs) add-velocity
+			(p3d-scale impulse-per-mass im1))
+		 (when (second refs)
+		   (swap! (second refs) add-velocity
+			  (p3d-scale impulse-per-mass (- im2))))))))))))
 
-(def *resolution-steps* 3)
+(defn resolve-scene-interpenetration [contacts]
+  (when contacts
+    (let [strongest (apply min-key :depth contacts)
+	  {:keys [depth normal refs]} strongest
+	  im1 (:inverse-mass @(first refs))
+	  im2 (or (and (second refs) (:inverse-mass @(second refs)))
+		  0)
+	  tim (+ im1 im2)
+	  depth-per-imass (/ depth tim)]
+
+      (swap! (first refs) add-position
+	     (p3d-scale normal (* depth-per-imass im1)))
+      (when (second refs)
+	(swap! (second refs) add-position
+	       (p3d-scale normal (* -1 depth-per-imass im2)))))))
+
+(defn calculate-inter-particle-contacts [particles]
+  (let [result (atom (transient []))]
+    (loop [head (first particles)
+	   remaining (rest particles)]
+      (when head
+	(doseq [other remaining]
+	  (if-let [contact (unit-aabb-particle-contact @head @other)]
+	    (swap! result conj! (conj contact {:refs [head other]}))))
+	(recur (first remaining)
+	       (rest remaining))))
+    (persistent! @result)))
+
+
+(defn calculate-all-contacts []
+  (let [scene-contacts
+	  (mapcat
+	   (fn [p]
+	     ;; compute contacts and append the associated atom
+	     ;; to the contact record
+	     (map (fn [contact] (conj contact {:refs [p]}))
+		  (particle-scene-contacts @p *scene-keys*)))
+	   @*physical-particles*)
+	;; this already associates the atoms
+	inter-particle-contacts
+	  (calculate-inter-particle-contacts @*physical-particles*)]
+
+    (concat scene-contacts inter-particle-contacts)))
+
+(def *resolution-steps* 4)
 
 (defn physics-update [particles generators duration]
   (reset-forces particles)
@@ -321,14 +403,16 @@
   (integrate-particles particles duration)
   (let [particle (:particle *character*)]
     (loop [count 0
-	   contacts (particle-scene-contacts @particle *scene-keys*)]
+	   contacts (calculate-all-contacts)]
       (when (not (empty? contacts))
+	;;(println count)
+	;;(println contacts)
 	;;(println "step" count "contacts" contacts)
-	(swap! particle resolve-scene-contacts contacts duration)
-	(swap! particle resolve-scene-interpenetration contacts)
+	(resolve-scene-contacts contacts duration)
+	(resolve-scene-interpenetration contacts)
 	(if (< count *resolution-steps*)
 	  (recur (+ count 1)
-		 (particle-scene-contacts @particle *scene-keys*)))))))
+		 (calculate-all-contacts)))))))
 
 (defprotocol game-object
   (game-position [obj]))
@@ -601,13 +685,12 @@
 ;; the camera object is the 3d point that should be centered in the
 ;; window when the world is projected to 2d
 ;;
-(def *camera* (atom (make-particle (position3d. 1.4 -1.5 0)
-				   :inverse-mass (/ 1)
-				   :damping 0.95)))
+(def *camera* (atom nil))
 
 (defn camera-position []
   (:position @*camera*))
 
+(def *particles* (atom nil))
 
 (defn- keyboard-unit-vector []
   (let [f (reduce p3d+
@@ -659,11 +742,9 @@
       (make-drag-force *camera* 5 0.1)
       (make-keyboard-force (:particle *character*) 2000 2)
       (make-drag-force (:particle *character*) 10 0.4)
+      (make-drag-force (:particle *chest*) 20 0.0)
+      (make-gravity-force (:particle *chest*) 10)
       (make-gravity-force (:particle *character*) 10)])
-
-(def *particles*
-     [*camera*
-      (:particle *character*)])
 
 (def current-camera-position (camera-position))
 
@@ -726,7 +807,8 @@ tile to a frame with the origin at the top left of the tile"
 (defn draw-world [^Graphics2D g]
   (execute-draw g {:background @*shadow-commands*
 		   :active (conj @*scene-commands*
-				 (character-position))}))
+				 (character-command)
+				 (chest-command))}))
 
 (defn- box-panel []
   (proxy [JPanel] []
@@ -751,7 +833,7 @@ tile to a frame with the origin at the top left of the tile"
       (swap! kbd conj {(.getKeyCode e) true}))))
 
 (defn update-world [dt animator]
-  (physics-update *particles* *force-generators* (/ dt 1000))
+  (physics-update @*particles* *force-generators* (/ dt 1000))
   (.repaint (:panel animator)))
 
 (def *animator* (agent (make-animator :function #'update-world
@@ -783,7 +865,36 @@ tile to a frame with the origin at the top left of the tile"
       (.pack)
       (.setVisible true))))
 
+(defn reset-world []
+  (swap! (:particle *character*)
+    (fn [_]
+      (make-particle (position3d. 2.4 -4.3 1)
+		     :inverse-mass (/ 100)
+		     :damping 0.90)))
+
+  (swap! (:particle *chest*)
+    (fn [_]
+      (make-particle (position3d. 2 -3 1)
+		     :inverse-mass (/ 1000)
+		     :damping 0.90)))
+
+  (swap! *camera*
+    (fn [_]
+      (make-particle (position3d. 1.4 -1.5 0)
+		     :inverse-mass (/ 1)
+		     :damping 0.95)))
+
+  (swap! *physical-particles*
+    (fn [_] [(:particle *character*)
+	     (:particle *chest*)]))
+
+  (swap! *particles*
+    (fn [_] (conj @*physical-particles* *camera*))))
+
+
+
 (defn -main [& args]
+  (reset-world)
   (box)
   (load-resources)
   (bake-scene-commands)
