@@ -337,11 +337,13 @@
 		 tim (+ im1 im2)]
 	     (when (> tim 0)
 	       (let [new-sep-vel (- (* sep-vel restitution))
-		     new-sep-vel (+ new-sep-vel
-				    (* (min
-					(velocity-from-accel strongest duration)
-					0)
-				       restitution))
+		     vel-from-accel (velocity-from-accel strongest duration)
+		     new-sep-vel (if (< vel-from-accel 0)
+				   (max 0
+					(+ new-sep-vel
+					   (* vel-from-accel restitution)))
+				   new-sep-vel)
+		     new-sep-vel (max new-sep-vel 0)
 		     delta-vel (- new-sep-vel sep-vel)
 		     impulse-per-mass (p3d-scale normal (/ delta-vel tim))]
 
